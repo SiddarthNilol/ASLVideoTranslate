@@ -85,7 +85,7 @@ def process_video(data_dir="/home/dell/Desktop/ASLVideoTranslate/data", video_di
     
     json_index_file = json.load(open(os.path.join(data_dir, "WLASL_v0.3.json"), "r"))
 
-    for entry in json_index_file:
+    for entry in tqdm(json_index_file):
         gloss = entry['gloss']
         if gloss not in top_gloss_list:
             continue  # Skip glosses that are not in the top list
@@ -130,12 +130,12 @@ def process_video(data_dir="/home/dell/Desktop/ASLVideoTranslate/data", video_di
 
                 vjepa_arr = vjepa_encoder.encode(vjepa_video)
                 vjepa_arr = vjepa_arr.cpu().numpy()
-                vjepa_ouput_path = os.path.join(output_dir, f"{gloss}_{video_id}_{idx}_vjepa.npy")
-                np.save(vjepa_ouput_path, vjepa_arr)
+                vjepa_ouput_path = os.path.join(output_dir, f"{gloss}_{video_id}_{idx}_vjepa.npz")
+                np.savez_compressed(vjepa_ouput_path, data=vjepa_arr)
 
 
 def create_index_file(processed_dir="/home/dell/Desktop/ASLVideoTranslate/data/selected_videos", index_file="/home/dell/Desktop/ASLVideoTranslate/data/WLASL_v0.3.json"):
-    selected_files = glob(os.path.join(processed_dir, "*_vjepa.npy"))
+    selected_files = glob(os.path.join(processed_dir, "*_vjepa.npz"))
     index_list = []
     for file_path in selected_files:
         filename = os.path.basename(file_path)
@@ -153,30 +153,6 @@ def create_index_file(processed_dir="/home/dell/Desktop/ASLVideoTranslate/data/s
     index_df = pd.DataFrame(index_list)
     index_df.to_csv(os.path.join(processed_dir, "index.csv"), index=False)
 
-
-
-    # index_list = []
-    # json_content = json.load(open(index_file, "r"))
-    
-    # for entry in json_content:
-    #     gloss = entry['gloss']
-    #     instances = entry['instances']
-
-    #     for inst in instances:
-    #         video_id = inst['video_id']
-    #         npy_path = os.path.join(processed_dir, f"{video_id}_vjepa.npy")
-    #         if os.path.exists(npy_path):
-    #             index_list.append({
-    #                 "video_id": video_id,
-    #                 "gloss": gloss,
-    #                 "vjepa_path": npy_path
-    #             })
-    #         else:
-    #             print(f"Warning: {npy_path} not found, skipping.")
-    
-    # index_df = pd.DataFrame(index_list)
-    # index_df.to_csv(os.path.join(processed_dir, "index.csv"), index=False)
-
 if __name__ == "__main__":
-    process_video()
+    #process_video()
     create_index_file()

@@ -23,19 +23,21 @@ class VjepaDataset(Dataset):
         if 'video_id' not in df.columns or 'gloss' not in df.columns or 'path_to_npy_file' not in df.columns:
             raise ValueError('index_csv must contain columns `video_id`, `gloss`, and `path_to_npy_file`')
 
-        if selected_glosses is None:
-            top = df['gloss'].value_counts().nlargest(300).index.tolist()
-            df = df[df['gloss'].isin(top)]
-        else:
-            df = df[df['gloss'].isin(selected_glosses)]
+        # if selected_glosses is None:
+        #     top = df['gloss'].value_counts().nlargest(300).index.tolist()
+        #     df = df[df['gloss'].isin(top)]
+        # else:
+        #     df = df[df['gloss'].isin(selected_glosses)]
 
         df = df.drop_duplicates(subset=['video_id'])
 
         self.processed_dir = processed_dir
-        self.records = df[['video_id', 'gloss']].reset_index(drop=True)
+        self.records = df[['video_id', 'gloss', 'path_to_npy_file']].reset_index(drop=True)
 
         glosses = sorted(self.records['gloss'].unique())
         self.gloss2idx = {g: i for i, g in enumerate(glosses)}
+
+        print(f"Loaded {len(self.records)} videos with {len(glosses)} unique glosses")
 
     def __len__(self):
         return len(self.records)
@@ -51,14 +53,25 @@ class VjepaDataset(Dataset):
         # if not os.path.exists(fname):
         #     raise FileNotFoundError(fname)
 
-        arr = np.load(raw_path)
-        # handle expected shapes: (1, C, T) or (C, T)
+        if raw_path.endswith('.npz'):
+            arr = np.load(raw_path)['data']
+        else:
+            arr = np.load(raw_path)
+        # handle expected shapes: (1, T, C) or (T, C)
         if arr.ndim == 3 and arr.shape[0] == 1:
             arr = arr.squeeze(0)
         if arr.ndim != 2:
             raise ValueError(f'Unsupported embedding shape {arr.shape} for file {raw_path}')
-        # arr shape is [C, T] -> transpose to [T, C]
-        emb = torch.from_numpy(arr.T).float()
+        
+        emb = torch.from_numpy(arr).float()
+
+        if torch.isnan(emb).any() or torch.isinf(emb).any():
+            print(f"WARNING: NaN/Inf detected in {raw_path}")
+            # Replace with zeros to avoid crashing
+            emb = torch.zeros_like(emb)
+
+        emb = torch.nn.functional.normalize(emb, p=2, dim=-1)
+        
         label = self.gloss2idx[row['gloss']]
         return emb, label
 

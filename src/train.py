@@ -1,6 +1,6 @@
 import argparse
 import os
-import random
+import time
 
 import numpy as np
 import sklearn.model_selection as sk
@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from dataset import VjepaDataset, collate_pad
-from models.transformer_encoder_asl import TransformerASLEncoder
+from models.asl_classifier import GlossClassifier
 
 
 def stratified_split(dataset, val_frac=0.2, seed=42):
@@ -26,18 +26,39 @@ def train_one_epoch(model, loader, optim, device):
     total = 0
     running_loss = 0.0
     correct = 0
-    for batch in loader:
+    for batch_idx, batch in enumerate(loader):
         x, lengths, y = batch
         x, lengths, y = x.to(device), lengths.to(device), y.to(device)
-        logits = model(x, lengths)
+
+        if torch.isnan(x).any():
+            print(f"WARNING: NaN detected in input batch {batch_idx}")
+            continue
+
+        logits = model(x)
+
+        if torch.isnan(logits).any():
+            print(f"WARNING: NaN detected in logits batch {batch_idx}")
+            continue
+
         loss = loss_fn(logits, y)
+
+        if torch.isnan(loss):
+            print(f"WARNING: NaN loss at batch {batch_idx}, skipping")
+            continue
+
         optim.zero_grad()
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
         optim.step()
+
         running_loss += loss.item() * x.size(0)
         preds = logits.argmax(dim=1)
         correct += (preds == y).sum().item()
         total += x.size(0)
+
+
     avg_loss = running_loss / max(total, 1)
     acc = correct / total if total > 0 else 0.0
     return avg_loss, acc
@@ -51,10 +72,12 @@ def evaluate(model, loader, device):
         for batch in loader:
             x, lengths, y = batch
             x, lengths, y = x.to(device), lengths.to(device), y.to(device)
-            logits = model(x, lengths)
+            
+            logits = model(x)
             preds = logits.argmax(dim=1)
             correct += (preds == y).sum().item()
             total += y.size(0)
+
     return correct / total if total > 0 else 0.0
 
 def main():
@@ -66,8 +89,8 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    index_file_path = os.path.join('/home/dell/Desktop/ASLVideoTranslate/data/processed_videos', 'index.csv')
-    processed_video_dir = os.path.join('/home/dell/Desktop/ASLVideoTranslate/data', 'processed_videos')
+    index_file_path = os.path.join('/home/dell/Desktop/ASLVideoTranslate/data/selected_videos', 'index.csv')
+    processed_video_dir = os.path.join('/home/dell/Desktop/ASLVideoTranslate/data', 'selected_videos')
     
     ds = VjepaDataset(index_file_path, processed_video_dir)
     
@@ -79,17 +102,54 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False, collate_fn=collate_pad)
 
     # infer input dim from first available sample
-    sample_emb, _ = ds[0]
+    sample_emb, _ = train_ds[0]
     input_dim = sample_emb.shape[1]
     num_classes = len(ds.gloss2idx)
 
-    model = TransformerASLEncoder(input_dim=input_dim, num_classes=num_classes).to(device)
-    optim = torch.optim.Adam(model.parameters(), lr=args.lr)
+    model = GlossClassifier(
+        vjepa_dim=input_dim, 
+        num_classes=num_classes,
+        dropout=0.2  # Increased dropout
+    ).to(device)
+    print(f"Model parameters: {model.count_parameters():,}")
+
+    optim = torch.optim.AdamW(
+        model.parameters(), 
+        lr=args.lr,
+        weight_decay=0.01
+    )
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optim, 
+        T_max=args.epochs,
+        eta_min=1e-6
+    )
+    best_val_acc = 0.0
 
     for epoch in range(1, args.epochs + 1):
         loss, train_acc = train_one_epoch(model, train_loader, optim, device)
         val_acc = evaluate(model, val_loader, device)
-        print(f'Epoch {epoch} train loss: {loss:.4f}  train acc: {train_acc:.4f}  val acc: {val_acc:.4f}')
+
+        scheduler.step()
+        print(f'Epoch {epoch}/{args.epochs}')
+        print(f'  Train Loss: {loss:.4f}  Train Acc: {train_acc:.4f}')
+        print(f'  Val Acc: {val_acc:.4f}')
+        print(f'  LR: {optim.param_groups[0]["lr"]:.6f}')
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            model_dir = '/home/dell/Desktop/ASLVideoTranslate/models'
+            os.makedirs(model_dir, exist_ok=True)
+            model_path = os.path.join(model_dir, 'gloss_classifier_best.pt')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optim.state_dict(),
+                'val_acc': val_acc,
+            }, model_path)
+            print(f'  ✓ Saved best model (val_acc: {val_acc:.4f})')
+    
+    print(f'\nTraining complete! Best val acc: {best_val_acc:.4f}')
 
 
 if __name__ == '__main__':

@@ -27,6 +27,10 @@ class GlossClassifier(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
+        nn.init.xavier_uniform_(self.attention_score.weight)
+        if self.attention_score.bias is not None:
+            nn.init.zeros_(self.attention_score.bias)
+
         for m in self.classifier:
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
@@ -37,7 +41,7 @@ class GlossClassifier(nn.Module):
         # x: [B, T, D]
         attn_scores = self.attention_score(vjepa_features).squeeze(-1)  # [B, T]
         attn_weights = torch.softmax(attn_scores, dim=1)  # [B, T]
-        weighted_sum = torch.sum(vjepa_features * attn_weights.unsqueeze(-1), dim=1)  # [B, D]
+        weighted_sum = (vjepa_features * attn_weights.unsqueeze(-1)).sum(dim=1)  # [B, D]
         logits = self.classifier(weighted_sum)  # [B, num_classes]
         return logits
 
