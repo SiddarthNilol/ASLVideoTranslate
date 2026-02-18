@@ -9,7 +9,7 @@ import torch
 import torchvision.transforms.functional as F
 from tqdm import tqdm
 
-from src.vjepa_encoder import VJEPA2Encoder
+from vjepa_encoder import VJEPA2Encoder
 
 vjepa_num_frames = 16
 vjepa_mean = (0.485, 0.456, 0.406)
@@ -32,7 +32,7 @@ def load_video_opencv(path: str, target_fps: int) -> np.ndarray:
     if orig_fps is None or orig_fps <= 0:
         orig_fps = target_fps
 
-    step = max(1, int(round(orig_fps / target_fps)))
+    step = 1
     frames = []
     frame_idx = 0
     target_idx = 0
@@ -52,65 +52,130 @@ def load_video_opencv(path: str, target_fps: int) -> np.ndarray:
         return np.stack(frames, axis=0)
     else:
         raise RuntimeError(f"No frames extracted from {path}")
+    
 
-def process_video(video_dir="/home/dell/Desktop/ASLVideoTranslate/data/videos", output_dir="/home/dell/Desktop/ASLVideoTranslate/data/processed_videos"):
+def apply_gaussian_blur(frames: np.ndarray) -> np.ndarray:
+    """Apply Gaussian blur to each frame."""
+    blurred_frames = []
+    for frame in frames:
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        blurred_frames.append(blurred)
+    return np.stack(blurred_frames, axis=0)
 
+
+def convert_to_black_and_white(frames: np.ndarray) -> np.ndarray:
+    """Convert frames to black and white."""
+    bw_frames = []
+    for frame in frames:
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        bw = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        bw_frames.append(bw)
+    return np.stack(bw_frames, axis=0)
+
+
+def process_video(data_dir="/home/dell/Desktop/ASLVideoTranslate/data", video_dir="/home/dell/Desktop/ASLVideoTranslate/data/videos", output_dir="/home/dell/Desktop/ASLVideoTranslate/data/selected_videos"):
+    os.makedirs(output_dir, exist_ok=True)
+
+    print("Initializing VJEPA encoder...")
     vjepa_encoder = VJEPA2Encoder(model_name=VJEPA_MODEL_NAME, torch_dtype=torch.bfloat16, device=DEVICE)
-
-    video_path_list = glob(os.path.join(video_dir, "*.mp4"))
-    print(f"Found {len(video_path_list)} videos to process.")
     
-    for video_path in tqdm(video_path_list):
-        base_name = os.path.splitext(os.path.basename(video_path))[0]
-        frames = load_video_opencv(video_path, target_fps=30)
-        video_tensor = torch.from_numpy(frames).float().to(DEVICE)  # (T, H, W, 3)
-        video_tensor = video_tensor.permute(0, 3, 1, 2) # (T, 3, H, W)
-
-        H_orig = video_tensor.shape[2]
-        W_orig = video_tensor.shape[3]
-        min_dim = min(H_orig, W_orig)
-
-        video = F.center_crop(video_tensor, [min_dim, min_dim])
-        video = F.resize(video, [256, 256])
-
-        T = video.shape[0]
-        indices = torch.linspace(0, T - 1, vjepa_num_frames, device=DEVICE).long()
-        video = video[indices]
-
-        vjepa_video = video / 255.0
-        for c in range(3):
-            vjepa_video[:, c] = (vjepa_video[:, c] - vjepa_mean[c]) / vjepa_std[c]
-
-        vjepa_video = vjepa_video.to(vjepa_encoder.torch_dtype)
-
-        vjepa_arr = vjepa_encoder.encode(vjepa_video)
-        vjepa_ouput_path = os.path.join(output_dir, f"{base_name}_vjepa.npz")
-        np.savez_compressed(vjepa_ouput_path, vjepa_arr)
-
-def create_index_file(processed_dir="/home/dell/Desktop/ASLVideoTranslate/data/processed_videos", index_file="/home/dell/Desktop/ASLVideoTranslate/data/WLASL_v0.3.json"):
-    npz_files = glob(os.path.join(processed_dir, "*_vjepa.npz"))
-
-    index_list = []
-    json_content = json.load(open(index_file, "r"))
+    #Read top gloss list from a .txt file
+    with open('/home/dell/Desktop/ASLVideoTranslate/data/top_glosses.txt', 'r') as f:
+        top_gloss_list = [line.strip() for line in f.readlines()]
     
-    for entry in json_content:
+    json_index_file = json.load(open(os.path.join(data_dir, "WLASL_v0.3.json"), "r"))
+
+    for entry in json_index_file:
         gloss = entry['gloss']
-        instances = entry['instances']
+        if gloss not in top_gloss_list:
+            continue  # Skip glosses that are not in the top list
+                     
+        for instance in entry['instances']:
+            video_id = instance['video_id']
+            video_path = os.path.join(video_dir, f"{video_id}.mp4")
+            if not os.path.exists(video_path):
+                print(f"Warning: Video file {video_path} not found, skipping.")
+                continue
+            
+            frames = load_video_opencv(video_path, target_fps=30)
 
-        for inst in instances:
-            video_id = inst['video_id']
-            npz_path = os.path.join(processed_dir, f"{video_id}_vjepa.npz")
-            if os.path.exists(npz_path):
-                index_list.append({
-                    "video_id": video_id,
-                    "gloss": gloss,
-                    "vjepa_path": npz_path
-                })
-            else:
-                print(f"Warning: {npz_path} not found, skipping.")
-    
+            gaussian_frames = apply_gaussian_blur(frames)
+            bw_frames = convert_to_black_and_white(gaussian_frames)
+
+            all_frames_list = [frames, gaussian_frames, bw_frames]
+            idx_list = ["orig", "gaussian", "bw"]
+            for frames, idx in zip(all_frames_list, idx_list):
+                video_tensor = torch.from_numpy(frames).float().to(DEVICE)  # (T, H, W, 3)
+                video_tensor = video_tensor.permute(0, 3, 1, 2) # (T, 3, H, W)
+
+                H_orig = video_tensor.shape[2]
+                W_orig = video_tensor.shape[3]
+                min_dim = min(H_orig, W_orig)
+
+                video = F.center_crop(video_tensor, [min_dim, min_dim])
+                video = F.resize(video, [256, 256])
+
+                T = video.shape[0]
+                if T < vjepa_num_frames:
+                    continue  # Skip videos that are too short
+
+                indices = torch.linspace(0, T - 1, vjepa_num_frames, device=DEVICE).long()
+                video = video[indices]
+
+                vjepa_video = video / 255.0
+                for c in range(3):
+                    vjepa_video[:, c] = (vjepa_video[:, c] - vjepa_mean[c]) / vjepa_std[c]
+
+                vjepa_video = vjepa_video.to(vjepa_encoder.torch_dtype)
+
+                vjepa_arr = vjepa_encoder.encode(vjepa_video)
+                vjepa_arr = vjepa_arr.cpu().numpy()
+                vjepa_ouput_path = os.path.join(output_dir, f"{gloss}_{video_id}_{idx}_vjepa.npy")
+                np.save(vjepa_ouput_path, vjepa_arr)
+
+
+def create_index_file(processed_dir="/home/dell/Desktop/ASLVideoTranslate/data/selected_videos", index_file="/home/dell/Desktop/ASLVideoTranslate/data/WLASL_v0.3.json"):
+    selected_files = glob(os.path.join(processed_dir, "*_vjepa.npy"))
+    index_list = []
+    for file_path in selected_files:
+        filename = os.path.basename(file_path)
+        parts = filename.split("_")
+        if len(parts) < 4:
+            print(f"Warning: Unexpected filename format {filename}, skipping.")
+            continue
+        gloss = parts[0]
+
+        index_list.append({
+            "video_id": filename,
+            "gloss": gloss,
+            "path_to_npy_file": file_path
+        })
     index_df = pd.DataFrame(index_list)
     index_df.to_csv(os.path.join(processed_dir, "index.csv"), index=False)
+
+
+
+    # index_list = []
+    # json_content = json.load(open(index_file, "r"))
+    
+    # for entry in json_content:
+    #     gloss = entry['gloss']
+    #     instances = entry['instances']
+
+    #     for inst in instances:
+    #         video_id = inst['video_id']
+    #         npy_path = os.path.join(processed_dir, f"{video_id}_vjepa.npy")
+    #         if os.path.exists(npy_path):
+    #             index_list.append({
+    #                 "video_id": video_id,
+    #                 "gloss": gloss,
+    #                 "vjepa_path": npy_path
+    #             })
+    #         else:
+    #             print(f"Warning: {npy_path} not found, skipping.")
+    
+    # index_df = pd.DataFrame(index_list)
+    # index_df.to_csv(os.path.join(processed_dir, "index.csv"), index=False)
 
 if __name__ == "__main__":
     process_video()
