@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+import json
 
 import numpy as np
 import sklearn.model_selection as sk
@@ -10,6 +11,28 @@ from torch.utils.data import DataLoader, Subset
 from dataset import VjepaDataset, collate_pad
 from models.asl_classifier import GlossClassifier
 
+# Utility: Create vocabulary JSON from dataset
+def create_vocab_file(dataset, output_path):
+    """
+    Create vocabulary JSON file from dataset
+    
+    Args:
+        dataset: VjepaDataset instance
+        output_path: where to save vocab.json
+    """
+    gloss_to_idx = dataset.gloss2idx
+    idx_to_gloss = {str(v): k for k, v in gloss_to_idx.items()}
+    
+    vocab_data = {
+        'gloss_to_idx': gloss_to_idx,
+        'idx_to_gloss': idx_to_gloss,
+        'num_classes': len(gloss_to_idx)
+    }
+    
+    with open(output_path, 'w') as f:
+        json.dump(vocab_data, f, indent=4)
+    
+    print(f"✓ Vocabulary saved to {output_path}")
 
 def stratified_split(dataset, val_frac=0.2, seed=42):
     records = dataset.records
@@ -149,6 +172,9 @@ def main():
             }, model_path)
             print(f'  ✓ Saved best model (val_acc: {val_acc:.4f})')
     
+    vocab_path = os.path.join(model_dir, "vocab.json")
+    create_vocab_file(ds, vocab_path)
+
     print(f'\nTraining complete! Best val acc: {best_val_acc:.4f}')
 
 

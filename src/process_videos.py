@@ -94,7 +94,6 @@ def process_video(data_dir="/home/dell/Desktop/ASLVideoTranslate/data", video_di
             video_id = instance['video_id']
             video_path = os.path.join(video_dir, f"{video_id}.mp4")
             if not os.path.exists(video_path):
-                print(f"Warning: Video file {video_path} not found, skipping.")
                 continue
             
             frames = load_video_opencv(video_path, target_fps=30)
@@ -153,6 +152,7 @@ def create_index_file(processed_dir="/home/dell/Desktop/ASLVideoTranslate/data/s
     index_df = pd.DataFrame(index_list)
     index_df.to_csv(os.path.join(processed_dir, "index.csv"), index=False)
 
+
 if __name__ == "__main__":
-    #process_video()
+    process_video()
     create_index_file()
