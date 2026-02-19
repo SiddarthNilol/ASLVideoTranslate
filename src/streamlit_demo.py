@@ -1,4 +1,4 @@
-# File: streamlit_live_demo.py
+# File: streamlit_demo.py
 
 import streamlit as st
 import cv2
@@ -10,10 +10,9 @@ from pathlib import Path
 import json
 
 import torchvision.transforms.functional as F
-from transformers import T5ForConditionalGeneration, T5Tokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from models.asl_classifier import GlossClassifier
-from vjepa_encoder import VJEPA2Encoder
 
 # V-JEPA preprocessing constants
 vjepa_num_frames = 16
@@ -66,12 +65,17 @@ class LiveASLTranslator:
         # V-JEPA encoder
         self.vjepa_encoder = vjepa_encoder
         
-        # T5 for translation
+        # LLM for translation
         self.use_t5 = use_t5
         if use_t5:
-            self.t5_tokenizer = T5Tokenizer.from_pretrained("t5-small")
-            self.t5_model = T5ForConditionalGeneration.from_pretrained("t5-small").to(device)
-            self.t5_model.eval()
+            self.llm_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B-Instruct")
+            self.llm_model = AutoModelForCausalLM.from_pretrained(
+                "Qwen/Qwen2.5-3B-Instruct",
+                torch_dtype=torch.float16,
+                device_map="cuda"
+            )
+            self.llm_model.eval()
+            print("✓ Qwen2.5-3B loaded")
         
         # State variables
         self.gloss_history = []
@@ -136,41 +140,79 @@ class LiveASLTranslator:
         
         return None, 0.0
     
-    def translate_glosses(self, gloss_sequence):
-        """Translate gloss sequence to English"""
+    def translate_glosses_to_english(self, gloss_sequence):
+        """
+        Translate ASL gloss sequence to natural English using Qwen2.5-3B
+        
+        Args:
+            gloss_sequence: string of space-separated glosses
+        
+        Returns:
+            english_text: natural English translation
+        """
         if not self.use_t5 or not gloss_sequence:
             return ""
         
-        input_text = f"translate ASL gloss to English: {gloss_sequence}"
+        prompt = f"""<|im_start|>system
+        You are a helpful ASL (American Sign Language) translator. Convert glosses to natural English with proper grammar, articles (a, an, the), and verb conjugations.
+        Based on the length of the gloss sequence, you can infer if it's a short phrase or a longer sentence. Use appropriate punctuation and capitalization.
+        Examples:
+        - "HELLO MY NAME J-O-H-N" → "Hello, my name is John."
+        - "YESTERDAY ME GO STORE BUY MILK" → "Yesterday, I went to the store to buy milk."
+        - "TODAY WEATHER NICE" → "The weather is nice today."
+        <|im_end|>
+        <|im_start|>user
+        Translate: {gloss_sequence}<|im_end|>
+        <|im_start|>assistant
+        """
         
-        inputs = self.t5_tokenizer(
-            input_text,
+        inputs = self.llm_tokenizer(
+            prompt,
             return_tensors='pt',
-            max_length=128,
-            truncation=True
+            truncation=True,
+            max_length=512
         ).to(self.device)
         
+        # input_length = inputs['input_ids'].shape[1]
+        
         with torch.no_grad():
-            outputs = self.t5_model.generate(
+            outputs = self.llm_model.generate(
                 **inputs,
-                max_length=128,
-                num_beams=4,
-                early_stopping=True,
-                no_repeat_ngram_size=2
+                max_new_tokens=100,
+                temperature=0.5,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=self.llm_tokenizer.eos_token_id
             )
         
-        english = self.t5_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return english
+        # Decode
+        full_output = self.llm_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Extract only the assistant's response (after the last <|assistant|>)
+        if "assistant" in full_output:
+            english_text = full_output.split("assistant")[-1].strip()
+        else:
+            english_text = full_output.strip()
+        
+        # Clean up any remaining special tokens
+        english_text = english_text.replace("<|end|>", "").strip()
+        
+        return english_text
     
     def update_gloss_history(self, gloss, confidence, threshold=0.6):
-        """Update gloss history with deduplication"""
+        """
+        Update gloss history with deduplication
+        
+        Returns:
+            bool: True if history was updated, False otherwise
+        """
         # Only add high-confidence predictions
         if confidence < threshold:
-            return
+            return False
         
         # Avoid consecutive duplicates
         if self.gloss_history and self.gloss_history[-1] == gloss:
-            return
+            return False
         
         self.gloss_history.append(gloss)
         
@@ -178,9 +220,7 @@ class LiveASLTranslator:
         if len(self.gloss_history) > 20:
             self.gloss_history.pop(0)
         
-        # Update translation
-        gloss_sequence = ' '.join(self.gloss_history[-10:])  # Last 10 for translation
-        self.english_translation = self.translate_glosses(gloss_sequence)
+        return True
 
 
 def test_camera_connection(camera_source):
@@ -201,7 +241,7 @@ def main():
         layout="wide"
     )
     
-    # Title - CHANGED
+    # Title
     st.title("🤟 Live ASL Translation on GB10")
     st.markdown("Real-time American Sign Language translation powered by V-JEPA 2")
     
@@ -255,7 +295,7 @@ def main():
         value="/home/dell/Desktop/ASLVideoTranslate/models/vocab.json"
     )
     
-    use_t5 = st.sidebar.checkbox("Enable T5 Translation", value=True)
+    use_t5 = st.sidebar.checkbox("Enable LLM Translation", value=True)
     
     confidence_threshold = st.sidebar.slider(
         "Confidence Threshold",
@@ -280,12 +320,12 @@ def main():
         with st.spinner("Loading model and V-JEPA encoder..."):
             try:
                 # Load V-JEPA encoder
-                # TODO: Implement your V-JEPA encoder loading
-                # from your_vjepa_module import load_vjepa_encoder
-                vjepa_encoder = VJEPA2Encoder(model_name="facebook/vjepa2-vitg-fpc64-256", device="cuda")
+                from vjepa_encoder import VJEPA2Encoder
+                vjepa_encoder = VJEPA2Encoder(
+                    model_name="facebook/vjepa2-vitg-fpc64-256",
+                    device="cuda"
+                )
                 
-                
-                # Uncomment when V-JEPA is ready:
                 st.session_state.translator = LiveASLTranslator(
                     model_checkpoint_path=model_path,
                     vocab_path=vocab_path,
@@ -299,10 +339,10 @@ def main():
             except Exception as e:
                 st.error(f"Error loading model: {e}")
     
-    # CHANGED: Single column layout (removed right sidebar)
+    # Main layout
     st.subheader("📹 Live Feed")
-
-    # Control buttons
+    
+    # Control buttons - PLACED BEFORE VIDEO
     button_col1, button_col2, button_col3 = st.columns(3)
     
     with button_col1:
@@ -313,11 +353,12 @@ def main():
     
     with button_col3:
         clear_button = st.button("🗑️ Clear History", use_container_width=True)
-
+    
+    # Video placeholder
     video_placeholder = st.empty()
     status_placeholder = st.empty()
     
-    # CHANGED: Translation info below video with bigger font
+    # Translation info below video
     st.markdown("---")
     english_placeholder = st.empty()
     history_placeholder = st.empty()
@@ -371,15 +412,39 @@ def main():
                         if gloss and confidence > confidence_threshold:
                             st.session_state.translator.current_gloss = gloss
                             st.session_state.translator.current_confidence = confidence
-                            st.session_state.translator.update_gloss_history(
+                            
+                            # Update history and check if new gloss was added
+                            history_updated = st.session_state.translator.update_gloss_history(
                                 gloss, confidence, confidence_threshold
                             )
+                            
+                            # If new gloss added, re-translate
+                            if history_updated:
+                                # Get last 10 glosses for context
+                                gloss_sequence = ' '.join(
+                                    st.session_state.translator.gloss_history[-10:]
+                                )
+                                
+                                # Show translating indicator
+                                english_placeholder.markdown(
+                                    "## 📝 English Translation\n### *Translating...*"
+                                )
+                                
+                                # Translate
+                                translation = st.session_state.translator.translate_glosses_to_english(
+                                    gloss_sequence
+                                )
+                                st.session_state.translator.english_translation = translation
                     
-                    # CHANGED: Display clean frame (no overlays)
+                    # Display clean frame (no overlays)
                     display_frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    video_placeholder.image(display_frame_rgb, channels="RGB", width=640) 
+                    video_placeholder.image(
+                        display_frame_rgb,
+                        channels="RGB",
+                        width=640  # Fixed width to prevent scrolling
+                    )
                     
-                    # CHANGED: Update translation below video with bigger font
+                    # Update translation display
                     if st.session_state.translator.english_translation:
                         english_placeholder.markdown(
                             f"## 📝 English Translation\n### {st.session_state.translator.english_translation}",
@@ -390,7 +455,7 @@ def main():
                             "## 📝 English Translation\n### *Waiting for signs...*"
                         )
                     
-                    # CHANGED: Show gloss history with bigger font
+                    # Show gloss history
                     if st.session_state.translator.gloss_history:
                         history_text = " → ".join(st.session_state.translator.gloss_history[-10:])
                         history_placeholder.markdown(
@@ -403,7 +468,7 @@ def main():
                     
                     frame_count += 1
                     
-                    # Small delay to prevent overwhelming the UI
+                    # Small delay
                     time.sleep(0.03)
             
             finally:
@@ -422,7 +487,7 @@ def main():
         st.sidebar.success(f"""
         ✓ Model loaded  
         ✓ Vocabulary: {len(st.session_state.translator.idx_to_gloss)} signs  
-        ✓ T5 Translation: {'Enabled' if st.session_state.translator.use_t5 else 'Disabled'}
+        ✓ LLM Translation: {'Enabled' if st.session_state.translator.use_t5 else 'Disabled'}
         """)
     else:
         st.sidebar.warning("⚠️ Model not loaded")
@@ -451,6 +516,7 @@ def main():
         - Sign clearly with good lighting
         - Wait 0.5s between signs for best accuracy
         - Adjust confidence threshold if getting too many/few detections
+        - Translation updates automatically when new signs are detected
         """)
 
 
