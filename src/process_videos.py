@@ -11,9 +11,9 @@ from tqdm import tqdm
 
 from vjepa_encoder import VJEPA2Encoder
 
-vjepa_num_frames = 16
-vjepa_mean = (0.485, 0.456, 0.406)
-vjepa_std = (0.229, 0.224, 0.225)
+VJEPA_NUM_FRAMES = 16
+VJEPA_MEAN = (0.485, 0.456, 0.406)
+VJEPA_STD = (0.229, 0.224, 0.225)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VJEPA_MODEL_NAME = "facebook/vjepa2-vitg-fpc64-256"
@@ -115,15 +115,15 @@ def process_video(data_dir="/home/dell/Desktop/ASLVideoTranslate/data", video_di
                 video = F.resize(video, [256, 256])
 
                 T = video.shape[0]
-                if T < vjepa_num_frames:
+                if T < VJEPA_NUM_FRAMES:
                     continue  # Skip videos that are too short
 
-                indices = torch.linspace(0, T - 1, vjepa_num_frames, device=DEVICE).long()
+                indices = torch.linspace(0, T - 1, VJEPA_NUM_FRAMES, device=DEVICE).long()
                 video = video[indices]
 
                 vjepa_video = video / 255.0
                 for c in range(3):
-                    vjepa_video[:, c] = (vjepa_video[:, c] - vjepa_mean[c]) / vjepa_std[c]
+                    vjepa_video[:, c] = (vjepa_video[:, c] - VJEPA_MEAN[c]) / VJEPA_STD[c]
 
                 vjepa_video = vjepa_video.to(vjepa_encoder.torch_dtype)
 

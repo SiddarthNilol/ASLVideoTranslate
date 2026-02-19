@@ -20,16 +20,9 @@ class VJEPA2Encoder():
         self.torch_dtype = torch_dtype
 
     def encode(self, video_tensor) -> torch.Tensor:
-        # Handle np.load(npz_file) which returns an NpzFile object
-        
-        # Convert float16/float32 [0,1] back to uint8 [0,255] if needed (or keep as float, depending on model)
-        # Most video models expect uint8 [0,255], but some accept float [0,1]
-        # Here we assume the processor handles both; if not, uncomment:
-        # if video_array.dtype in (np.float16, np.float32):
-        #     video_array = (video_array * 255).astype(np.uint8)
-        
         with torch.inference_mode():
             x_hf = self.transform(video_tensor, return_tensors="pt")["pixel_values_videos"].to(self.device)
+            
             # Extract the patch-wise features from the last layer
             out_patch_features_hf = self.model.get_vision_features(x_hf)
 

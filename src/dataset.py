@@ -23,12 +23,6 @@ class VjepaDataset(Dataset):
         if 'video_id' not in df.columns or 'gloss' not in df.columns or 'path_to_npy_file' not in df.columns:
             raise ValueError('index_csv must contain columns `video_id`, `gloss`, and `path_to_npy_file`')
 
-        # if selected_glosses is None:
-        #     top = df['gloss'].value_counts().nlargest(300).index.tolist()
-        #     df = df[df['gloss'].isin(top)]
-        # else:
-        #     df = df[df['gloss'].isin(selected_glosses)]
-
         df = df.drop_duplicates(subset=['video_id'])
 
         self.processed_dir = processed_dir
@@ -44,14 +38,7 @@ class VjepaDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
         row = self.records.loc[idx]
-        # prefer explicit path from CSV; resolve relative paths against processed_dir
         raw_path = str(row['path_to_npy_file'])
-        # if os.path.isabs(raw_path):
-        #     fname = raw_path
-        # else:
-        #     fname = os.path.join(self.processed_dir, raw_path)
-        # if not os.path.exists(fname):
-        #     raise FileNotFoundError(fname)
 
         if raw_path.endswith('.npz'):
             arr = np.load(raw_path)['data']
@@ -71,7 +58,7 @@ class VjepaDataset(Dataset):
             emb = torch.zeros_like(emb)
 
         emb = torch.nn.functional.normalize(emb, p=2, dim=-1)
-        
+
         label = self.gloss2idx[row['gloss']]
         return emb, label
 

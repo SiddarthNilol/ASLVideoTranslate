@@ -2,10 +2,9 @@ import os
 from models.asl_inference import ASLInferenceSystem
 from vjepa_encoder import VJEPA2Encoder
 
-def example_single_video_inference(test_path):
+def single_video_inference(test_path):
     vjepa_encoder = VJEPA2Encoder(model_name="facebook/vjepa2-vitg-fpc64-256", device="cuda")
 
-    # Initialize system
     system = ASLInferenceSystem(
         model_checkpoint_path='/home/dell/Desktop/ASLVideoTranslate/models/gloss_classifier_best.pt',
         vocab_path='/home/dell/Desktop/ASLVideoTranslate/models/vocab.json',
@@ -20,8 +19,8 @@ def example_single_video_inference(test_path):
     print(f"Confidence: {confidence:.2%}")
 
 
-def example_continuous_video_inference(test_path):
-    """Example: Predict from continuous video with sliding window"""
+def continuous_video_inference(test_path):
+    """Predict from continuous video with sliding window"""
     vjepa_encoder = VJEPA2Encoder(model_name="facebook/vjepa2-vitg-fpc64-256", device="cuda")
     system = ASLInferenceSystem(
         model_checkpoint_path='/home/dell/Desktop/ASLVideoTranslate/models/gloss_classifier_best.pt',
@@ -30,7 +29,6 @@ def example_continuous_video_inference(test_path):
         device='cuda'
     )
     
-    # Process continuous video
     predictions = system.predict_continuous_video(
         test_path,
         window_size=2.0,
@@ -46,18 +44,16 @@ def example_continuous_video_inference(test_path):
     print(f"\nGloss sequence: {glosses}")
 
 
-def example_end_to_end_translation(test_path):
-    """
-    Example: Complete end-to-end translation with T5
-    """
+def end_to_end_translation(test_path):
+    """Complete end-to-end translation with T5 and captioned video output"""
     vjepa_encoder = VJEPA2Encoder(model_name="facebook/vjepa2-vitg-fpc64-256", device="cuda")
-    # Initialize system with T5 translation enabled
+    
     system = ASLInferenceSystem(
         model_checkpoint_path='/home/dell/Desktop/ASLVideoTranslate/models/gloss_classifier_best.pt',
         vocab_path='/home/dell/Desktop/ASLVideoTranslate/models/vocab.json',
         vjepa_encoder=vjepa_encoder,  # Your V-JEPA encoder
         device='cuda',
-        use_t5_translation=True  # Enable T5
+        use_t5_translation=True  
     )
     
     # Process video end-to-end
@@ -91,8 +87,8 @@ if __name__ == "__main__":
         exit(1)
     
     if single_or_continuous == 's':
-        example_single_video_inference(test_path)
+        single_video_inference(test_path)
     elif single_or_continuous == 'e':
-        example_end_to_end_translation(test_path)
+        end_to_end_translation(test_path)
     else:
-        example_continuous_video_inference(test_path)
+        continuous_video_inference(test_path)

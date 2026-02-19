@@ -1,5 +1,3 @@
-# File: streamlit_demo.py
-
 import streamlit as st
 import cv2
 import torch
@@ -13,11 +11,12 @@ import torchvision.transforms.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from models.asl_classifier import GlossClassifier
+from vjepa_encoder import VJEPA2Encoder
 
-# V-JEPA preprocessing constants
-vjepa_num_frames = 16
-vjepa_mean = (0.485, 0.456, 0.406)
-vjepa_std = (0.229, 0.224, 0.225)
+
+VJEPA_NUM_FRAMES = 16
+VJEPA_MEAN = (0.485, 0.456, 0.406)
+VJEPA_STD = (0.229, 0.224, 0.225)
 
 
 class LiveASLTranslator:
@@ -37,15 +36,12 @@ class LiveASLTranslator:
         self.fps = 30
         self.window_frames = int(window_size * self.fps)
         
-        # Frame buffer for sliding window
         self.frame_buffer = deque(maxlen=self.window_frames)
         
-        # Load vocabulary
         with open(vocab_path, 'r') as f:
             vocab_data = json.load(f)
         self.idx_to_gloss = vocab_data['idx_to_gloss']
         
-        # Load gloss classifier
         checkpoint = torch.load(model_checkpoint_path, map_location=device)
         state_dict = checkpoint['model_state_dict']
         
@@ -62,10 +58,8 @@ class LiveASLTranslator:
         self.model.load_state_dict(state_dict)
         self.model.eval()
         
-        # V-JEPA encoder
         self.vjepa_encoder = vjepa_encoder
         
-        # LLM for translation
         self.use_t5 = use_t5
         if use_t5:
             self.llm_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B-Instruct")
@@ -77,7 +71,6 @@ class LiveASLTranslator:
             self.llm_model.eval()
             print("✓ Qwen2.5-3B loaded")
         
-        # State variables
         self.gloss_history = []
         self.current_gloss = "Waiting for sign..."
         self.current_confidence = 0.0
@@ -91,14 +84,12 @@ class LiveASLTranslator:
             return None, 0.0
         
         try:
-            # Convert buffer to numpy array
             frames = np.array(list(self.frame_buffer))  # (T, H, W, 3)
             
-            # Convert to tensor
+
             video_tensor = torch.from_numpy(frames).float().to(self.device)
             video_tensor = video_tensor.permute(0, 3, 1, 2)  # (T, 3, H, W)
             
-            # Preprocess (crop, resize, normalize)
             H, W = video_tensor.shape[2], video_tensor.shape[3]
             min_dim = min(H, W)
             
@@ -106,23 +97,19 @@ class LiveASLTranslator:
             video = F.resize(video, [256, 256])
             
             T = video.shape[0]
-            if T >= vjepa_num_frames:
-                # Sample uniformly
-                indices = torch.linspace(0, T - 1, vjepa_num_frames, device=self.device).long()
+            if T >= VJEPA_NUM_FRAMES:
+                indices = torch.linspace(0, T - 1, VJEPA_NUM_FRAMES, device=self.device).long()
                 video = video[indices]
                 
-                # Normalize
                 vjepa_video = video / 255.0
                 for c in range(3):
-                    vjepa_video[:, c] = (vjepa_video[:, c] - vjepa_mean[c]) / vjepa_std[c]
+                    vjepa_video[:, c] = (vjepa_video[:, c] - VJEPA_MEAN[c]) / VJEPA_STD[c]
                 
-                # Extract V-JEPA embedding
                 vjepa_video = vjepa_video.to(self.vjepa_encoder.torch_dtype)
                 
                 with torch.no_grad():
                     embedding = self.vjepa_encoder.encode(vjepa_video)
                     
-                    # Predict gloss
                     if embedding.ndim == 2:
                         embedding = embedding.unsqueeze(0)
                     
@@ -173,8 +160,6 @@ class LiveASLTranslator:
             max_length=512
         ).to(self.device)
         
-        # input_length = inputs['input_ids'].shape[1]
-        
         with torch.no_grad():
             outputs = self.llm_model.generate(
                 **inputs,
@@ -185,16 +170,13 @@ class LiveASLTranslator:
                 pad_token_id=self.llm_tokenizer.eos_token_id
             )
         
-        # Decode
         full_output = self.llm_tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Extract only the assistant's response (after the last <|assistant|>)
         if "assistant" in full_output:
             english_text = full_output.split("assistant")[-1].strip()
         else:
             english_text = full_output.strip()
-        
-        # Clean up any remaining special tokens
+
         english_text = english_text.replace("<|end|>", "").strip()
         
         return english_text
@@ -206,17 +188,14 @@ class LiveASLTranslator:
         Returns:
             bool: True if history was updated, False otherwise
         """
-        # Only add high-confidence predictions
         if confidence < threshold:
             return False
         
-        # Avoid consecutive duplicates
         if self.gloss_history and self.gloss_history[-1] == gloss:
             return False
         
         self.gloss_history.append(gloss)
         
-        # Keep last 20 glosses
         if len(self.gloss_history) > 20:
             self.gloss_history.pop(0)
         
@@ -266,14 +245,13 @@ def main():
         phone_port = st.sidebar.text_input("Port", value="4747")
         camera_source = f"http://{phone_ip}:{phone_port}/video"
         
-        # Test connection button
         if st.sidebar.button("🔍 Test Connection"):
             with st.spinner("Testing connection..."):
                 if test_camera_connection(camera_source):
                     st.sidebar.success("✓ Connected to phone!")
                 else:
                     st.sidebar.error("✗ Cannot connect. Check IP and make sure DroidCam app is running.")
-    else:  # IP Camera
+    else:
         camera_source = st.sidebar.text_input(
             "Camera URL",
             value="rtsp://192.168.1.100:8554/stream",
@@ -282,7 +260,6 @@ def main():
     
     st.sidebar.markdown("---")
     
-    # Model configuration
     st.sidebar.subheader("🤖 Model Settings")
     
     model_path = st.sidebar.text_input(
@@ -305,7 +282,6 @@ def main():
         step=0.05
     )
     
-    # Initialize session state
     if 'translator' not in st.session_state:
         st.session_state.translator = None
     
@@ -315,12 +291,9 @@ def main():
     if 'camera_source' not in st.session_state:
         st.session_state.camera_source = camera_source
     
-    # Load model button
     if st.sidebar.button("🔄 Load Model"):
         with st.spinner("Loading model and V-JEPA encoder..."):
             try:
-                # Load V-JEPA encoder
-                from vjepa_encoder import VJEPA2Encoder
                 vjepa_encoder = VJEPA2Encoder(
                     model_name="facebook/vjepa2-vitg-fpc64-256",
                     device="cuda"
@@ -339,10 +312,8 @@ def main():
             except Exception as e:
                 st.error(f"Error loading model: {e}")
     
-    # Main layout
     st.subheader("📹 Live Feed")
     
-    # Control buttons - PLACED BEFORE VIDEO
     button_col1, button_col2, button_col3 = st.columns(3)
     
     with button_col1:
@@ -354,16 +325,13 @@ def main():
     with button_col3:
         clear_button = st.button("🗑️ Clear History", use_container_width=True)
     
-    # Video placeholder
     video_placeholder = st.empty()
     status_placeholder = st.empty()
     
-    # Translation info below video
     st.markdown("---")
     english_placeholder = st.empty()
     history_placeholder = st.empty()
     
-    # Handle buttons
     if start_button:
         st.session_state.running = True
         st.session_state.camera_source = camera_source
@@ -374,10 +342,8 @@ def main():
     if clear_button and st.session_state.translator:
         st.session_state.translator.gloss_history = []
         st.session_state.translator.english_translation = ""
-    
-    # Main loop
+
     if st.session_state.running and st.session_state.translator:
-        # Open camera/stream
         cap = cv2.VideoCapture(st.session_state.camera_source)
         
         if not cap.isOpened():
@@ -387,7 +353,7 @@ def main():
             status_placeholder.success(f"✓ Connected to: {st.session_state.camera_source}")
             
             frame_count = 0
-            prediction_interval = 15  # Predict every 15 frames (0.5 seconds)
+            prediction_interval = 15  # Predict every 16 frames (0.5 seconds)
             
             try:
                 while st.session_state.running:
@@ -397,12 +363,10 @@ def main():
                         time.sleep(0.1)
                         continue
                     
-                    # Add frame to buffer
                     resized = cv2.resize(frame, (224, 224))
                     rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
                     st.session_state.translator.frame_buffer.append(rgb_frame)
                     
-                    # Predict periodically
                     if (frame_count % prediction_interval == 0 and 
                         len(st.session_state.translator.frame_buffer) == 
                         st.session_state.translator.window_frames):
@@ -413,38 +377,31 @@ def main():
                             st.session_state.translator.current_gloss = gloss
                             st.session_state.translator.current_confidence = confidence
                             
-                            # Update history and check if new gloss was added
                             history_updated = st.session_state.translator.update_gloss_history(
                                 gloss, confidence, confidence_threshold
                             )
                             
-                            # If new gloss added, re-translate
                             if history_updated:
-                                # Get last 10 glosses for context
                                 gloss_sequence = ' '.join(
                                     st.session_state.translator.gloss_history[-10:]
                                 )
                                 
-                                # Show translating indicator
                                 english_placeholder.markdown(
                                     "## 📝 English Translation\n### *Translating...*"
                                 )
                                 
-                                # Translate
                                 translation = st.session_state.translator.translate_glosses_to_english(
                                     gloss_sequence
                                 )
                                 st.session_state.translator.english_translation = translation
-                    
-                    # Display clean frame (no overlays)
+                
                     display_frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     video_placeholder.image(
                         display_frame_rgb,
                         channels="RGB",
                         width=640  # Fixed width to prevent scrolling
                     )
-                    
-                    # Update translation display
+                
                     if st.session_state.translator.english_translation:
                         english_placeholder.markdown(
                             f"## 📝 English Translation\n### {st.session_state.translator.english_translation}",

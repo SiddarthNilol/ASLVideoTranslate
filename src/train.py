@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from dataset import VjepaDataset, collate_pad
 from models.asl_classifier import GlossClassifier
 
-# Utility: Create vocabulary JSON from dataset
+
 def create_vocab_file(dataset, output_path):
     """
     Create vocabulary JSON file from dataset
@@ -124,7 +124,6 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, collate_fn=collate_pad)
     val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False, collate_fn=collate_pad)
 
-    # infer input dim from first available sample
     sample_emb, _ = train_ds[0]
     input_dim = sample_emb.shape[1]
     num_classes = len(ds.gloss2idx)
@@ -132,7 +131,7 @@ def main():
     model = GlossClassifier(
         vjepa_dim=input_dim, 
         num_classes=num_classes,
-        dropout=0.2  # Increased dropout
+        dropout=0.2  
     ).to(device)
     print(f"Model parameters: {model.count_parameters():,}")
 
